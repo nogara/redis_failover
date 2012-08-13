@@ -423,10 +423,11 @@ module RedisFailover
     #   where the same RedisFailover::Client instance is referenced by
     #   nested blocks (e.g., block passed to multi).
     def client_for(method)
-      stack = Thread.current[@current_client_key] ||= []
-      client = stack.last || (REDIS_READ_OPS.include?(method) ? slave : master)
-      stack << client
-      client
+      # stack = Thread.current[@current_client_key] ||= []
+      # client = stack.last || (REDIS_READ_OPS.include?(method) ? slave : master)
+      # stack << client
+      # client
+      master
     end
 
     # Pops a client from the thread-local client stack.
