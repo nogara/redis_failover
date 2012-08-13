@@ -9,14 +9,6 @@ module RedisFailover
   class NodeManager
     include Util
 
-    # Name for the znode that handles exclusive locking between multiple
-    # Node Manager processes. Whoever holds the lock will be considered
-    # the "master" Node Manager, and will be responsible for monitoring
-    # the redis nodes. When a Node Manager that holds the lock disappears
-    # or fails, another Node Manager process will grab the lock and
-    # become the master.
-    LOCK_PATH = 'master_node_manager'
-
     # Number of seconds to wait before retrying bootstrap process.
     TIMEOUT = 5
 
@@ -34,6 +26,14 @@ module RedisFailover
       @znode = @options[:znode_path] || Util::DEFAULT_ZNODE_PATH
       @manual_znode = ManualFailover::ZNODE_PATH
       @mutex = Mutex.new
+
+      # Name for the znode that handles exclusive locking between multiple
+      # Node Manager processes. Whoever holds the lock will be considered
+      # the "master" Node Manager, and will be responsible for monitoring
+      # the redis nodes. When a Node Manager that holds the lock disappears
+      # or fails, another Node Manager process will grab the lock and
+      # become the
+      @lock_path = "#{@znode}_lock".freeze
     end
 
     # Starts the node manager.
@@ -44,7 +44,7 @@ module RedisFailover
       @leader = false
       setup_zk
       logger.info('Waiting to become master Node Manager ...')
-      @zk.with_lock(LOCK_PATH) do
+      @zk.with_lock(@lock_path) do
         @leader = true
         logger.info('Acquired master Node Manager lock')
         discover_nodes
@@ -219,13 +219,13 @@ module RedisFailover
     def discover_nodes
       @unavailable = []
       nodes = @options[:nodes].map { |opts| Node.new(opts) }.uniq
-      raise NoMasterError unless @master = find_master(nodes)
+      @master = find_master(nodes)
       @slaves = nodes - [@master]
       logger.info("Managing master (#{@master}) and slaves" +
         " (#{@slaves.map(&:to_s).join(', ')})")
 
       # ensure that slaves are correctly pointing to this master
-      redirect_slaves_to(@master)
+      redirect_slaves_to(@master) if @master
     end
 
     # Spawns the {RedisFailover::NodeWatcher} instances for each managed node.
@@ -315,7 +315,7 @@ module RedisFailover
     # Creates the znode path containing the redis nodes.
     def create_path
       unless @zk.exists?(@znode)
-        @zk.create(@znode, encode(current_nodes), :ephemeral => true)
+        @zk.create(@znode, encode(current_nodes))
         logger.info("Created ZooKeeper node #{@znode}")
       end
     rescue ZK::Exceptions::NodeExists
