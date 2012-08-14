@@ -64,6 +64,13 @@ module RedisFailover
       build_clients
     end
 
+
+    # Resque wants to use Resque.redis.reconnect to recreate all connections. So
+    # we provide ourselves as a client to receive the "reconnect" message
+    def client
+      self
+    end
+
     # Specifies a callback to invoke when the current redis node list changes.
     #
     # @param [Proc] a callback with current master and slaves as arguments
