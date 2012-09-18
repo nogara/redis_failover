@@ -71,6 +71,12 @@ module RedisFailover
       self
     end
 
+    # Sidekiq-web asks for a location in the redis client. Implements something here
+    # just to make sure it works
+    def location
+      'location'
+    end
+
     # Specifies a callback to invoke when the current redis node list changes.
     #
     # @param [Proc] a callback with current master and slaves as arguments
