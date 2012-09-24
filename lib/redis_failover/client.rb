@@ -64,10 +64,18 @@ module RedisFailover
       build_clients
     end
 
-
-    # Resque wants to use Resque.redis.reconnect to recreate all connections. So
-    # we provide ourselves as a client to receive the "reconnect" message
-    def client
+    # Stubs this method to return this RedisFailover::Client object.
+    #
+    # Some libraries (Resque) assume they can access the `client` via this method,
+    # but we don't want to actually ever expose the internal Redis connections.
+    #
+    # By returning `self` here, we can add stubs for functionality like #reconnect,
+    # and everything will Just Work.
+    #
+    # Takes an *args array for safety only.
+    #
+    # @return [RedisFailover::Client]
+    def client(*args)
       self
     end
 
@@ -190,6 +198,8 @@ module RedisFailover
       else
         logger.error("Unknown ZK node event: #{event.inspect}")
       end
+    ensure
+      @zk.stat(@znode, :watch => true)
     end
 
     # Determines if a method is a known redis operation.
@@ -250,7 +260,7 @@ module RedisFailover
     # @raise [NoMasterError] if no master fallback is available
     def slave
       # pick a slave, if none available fallback to master
-      if slave = @lock.synchronize { @slaves.sample }
+      if slave = @lock.synchronize { @slaves.shuffle.first }
         verify_role!(slave, :slave)
         return slave
       end
@@ -266,7 +276,7 @@ module RedisFailover
           return unless nodes_changed?(nodes)
 
           purge_clients
-          logger.info("Building new clients for nodes #{nodes}")
+          logger.info("Building new clients for nodes #{nodes.inspect}")
           new_master = new_clients_for(nodes[:master]).first if nodes[:master]
           new_slaves = new_clients_for(*nodes[:slaves])
           @master = new_master
@@ -300,7 +310,7 @@ module RedisFailover
     def fetch_nodes
       data = @zk.get(@znode, :watch => true).first
       nodes = symbolize_keys(decode(data))
-      logger.debug("Fetched nodes: #{nodes}")
+      logger.debug("Fetched nodes: #{nodes.inspect}")
 
       nodes
     rescue Zookeeper::Exceptions::InheritedConnectionError => ex
