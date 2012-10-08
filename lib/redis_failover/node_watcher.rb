@@ -18,6 +18,8 @@ module RedisFailover
       @node = node
       @max_failures = max_failures
       @monitor_thread = nil
+      @shutdown_lock = Mutex.new
+      @shutdown_cv = ConditionVariable.new
       @done = false
     end
 
@@ -32,9 +34,15 @@ module RedisFailover
 
     # Performs a graceful shutdown of this watcher.
     def shutdown
-      @done = true
-      @node.wakeup
-      @monitor_thread.join if @monitor_thread
+      @shutdown_lock.synchronize do
+        @done = true
+        begin
+          @node.wakeup
+        rescue
+          # best effort
+        end
+        @shutdown_cv.wait(@shutdown_lock)
+      end
     rescue => ex
       logger.warn("Failed to gracefully shutdown watcher for #{@node}")
     end
@@ -48,17 +56,12 @@ module RedisFailover
 
       loop do
         begin
-          return if @done
+          break if @done
           sleep(WATCHER_SLEEP_TIME)
-          @node.ping
+          latency = Benchmark.realtime { @node.ping }
           failures = 0
-
-          if @node.syncing_with_master?
-            notify(:syncing)
-          else
-            notify(:available)
-            @node.wait
-          end
+          notify(:available, latency)
+          @node.wait
         rescue NodeUnavailableError => ex
           logger.debug("Failed to communicate with node #{@node}: #{ex.inspect}")
           failures += 1
@@ -71,13 +74,18 @@ module RedisFailover
           logger.error(ex.backtrace.join("\n"))
         end
       end
+
+      @shutdown_lock.synchronize do
+        @shutdown_cv.broadcast
+      end
     end
 
     # Notifies the manager of a node's state.
     #
     # @param [Symbol] state the node's state
-    def notify(state)
-      @manager.notify_state(@node, state)
+    # @param [Integer] latency an optional latency
+    def notify(state, latency = nil)
+      @manager.notify_state(@node, state, latency)
     end
   end
 end

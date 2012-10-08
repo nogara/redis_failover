@@ -79,10 +79,12 @@ module RedisFailover
       self
     end
 
-    # Sidekiq-web asks for a location in the redis client. Implements something here
-    # just to make sure it works
+    # Delegates to the underlying Redis client to fetch the location.
+    # This method always returns the location of the master.
+    #
+    # @return [String] the redis location
     def location
-      'location'
+      dispatch(:client).location
     end
 
     # Specifies a callback to invoke when the current redis node list changes.
@@ -131,7 +133,7 @@ module RedisFailover
     # @option options [String] :host the host of the failover candidate
     # @option options [String] :port the port of the failover candidate
     def manual_failover(options = {})
-      ManualFailover.new(@zk, options).perform
+      ManualFailover.new(@zk, @root_znode, options).perform
       self
     end
 
@@ -176,12 +178,12 @@ module RedisFailover
     # Sets up the underlying ZooKeeper connection.
     def setup_zk
       @zk = ZK.new(@zkservers)
-      @zk.watcher.register(@znode) { |event| handle_zk_event(event) }
+      @zk.watcher.register(redis_nodes_path) { |event| handle_zk_event(event) }
       if @safe_mode
         @zk.on_expired_session { purge_clients }
       end
-      @zk.on_connected { @zk.stat(@znode, :watch => true) }
-      @zk.stat(@znode, :watch => true)
+      @zk.on_connected { @zk.stat(redis_nodes_path, :watch => true) }
+      @zk.stat(redis_nodes_path, :watch => true)
       update_znode_timestamp
     end
 
@@ -194,12 +196,12 @@ module RedisFailover
         build_clients
       elsif event.node_deleted?
         purge_clients
-        @zk.stat(@znode, :watch => true)
+        @zk.stat(redis_nodes_path, :watch => true)
       else
         logger.error("Unknown ZK node event: #{event.inspect}")
       end
     ensure
-      @zk.stat(@znode, :watch => true)
+      @zk.stat(redis_nodes_path, :watch => true)
     end
 
     # Determines if a method is a known redis operation.
@@ -308,7 +310,7 @@ module RedisFailover
     #
     # @return [Hash] the known master/slave redis servers
     def fetch_nodes
-      data = @zk.get(@znode, :watch => true).first
+      data = @zk.get(redis_nodes_path, :watch => true).first
       nodes = symbolize_keys(decode(data))
       logger.debug("Fetched nodes: #{nodes.inspect}")
 
@@ -474,7 +476,7 @@ module RedisFailover
     # @param [Hash] options the configuration options
     def parse_options(options)
       @zkservers = options.fetch(:zkservers) { raise ArgumentError, ':zkservers required'}
-      @znode = options.fetch(:znode_path, Util::DEFAULT_ZNODE_PATH)
+      @root_znode = options.fetch(:znode_path, Util::DEFAULT_ROOT_ZNODE_PATH)
       @namespace = options[:namespace]
       @password = options[:password]
       @db = options[:db]
@@ -482,6 +484,11 @@ module RedisFailover
       @max_retries = @retry ? options.fetch(:max_retries, 3) : 0
       @safe_mode = options.fetch(:safe_mode, true)
       @master_only = options.fetch(:master_only, false)
+    end
+
+    # @return [String] the znode path for the master redis nodes config
+    def redis_nodes_path
+      "#{@root_znode}/nodes"
     end
   end
 end
