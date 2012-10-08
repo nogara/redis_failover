@@ -1,3 +1,3 @@
 module RedisFailover
-  VERSION = '0.9.7.2'
+  VERSION = '0.9.7.3'
 end
