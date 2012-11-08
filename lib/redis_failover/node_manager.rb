@@ -12,15 +12,11 @@ module RedisFailover
     # Number of seconds to wait before retrying bootstrap process.
     TIMEOUT = 5
     # Number of seconds for checking node snapshots.
-    CHECK_INTERVAL = 10
+    CHECK_INTERVAL = 5
     # Number of max attempts to promote a master before releasing master lock.
     MAX_PROMOTION_ATTEMPTS = 3
-
-    # ZK Errors that the Node Manager cares about.
-    ZK_ERRORS = [
-      ZK::Exceptions::LockAssertionFailedError,
-      ZK::Exceptions::InterruptedSession
-    ].freeze
+    # Latency threshold for recording node state.
+    LATENCY_THRESHOLD = 0.5
 
     # Errors that can happen during the node discovery process.
     NODE_DISCOVERY_ERRORS = [
@@ -436,6 +432,12 @@ module RedisFailover
       write_state(redis_nodes_path, encode(current_nodes))
     end
 
+    # Writes the current monitored list of redis nodes. This method is always
+    # invoked by all running node managers.
+    def write_current_monitored_state
+      write_state(current_state_path, encode(node_availability_state), :ephemeral => true)
+    end
+
     # @return [String] root path for current node manager state
     def current_state_root
       "#{@root_znode}/manager_node_state"
@@ -496,21 +498,31 @@ module RedisFailover
     # @param [Symbol] state the node state
     # @param [Integer] latency an optional latency
     def update_current_state(node, state, latency = nil)
+      old_unavailable = @monitored_unavailable.dup
+      old_available = @monitored_available.dup
+
       case state
       when :unavailable
-        @monitored_unavailable |= [node]
-        @monitored_available.delete(node)
+        unless @monitored_unavailable.include?(node)
+          @monitored_unavailable << node
+          @monitored_available.delete(node)
+          write_current_monitored_state
+        end
       when :available
-        @monitored_available[node] = latency
-        @monitored_unavailable.delete(node)
+        last_latency = @monitored_available[node]
+        if last_latency.nil? || (latency - last_latency) > LATENCY_THRESHOLD
+          @monitored_available[node] = latency
+          @monitored_unavailable.delete(node)
+          write_current_monitored_state
+        end
       else
         raise InvalidNodeStateError.new(node, state)
       end
-
-      # flush ephemeral current node manager state
-      write_state(current_state_path,
-        encode(node_availability_state),
-        :ephemeral => true)
+    rescue => ex
+      # if an error occurs, make sure that we rollback to the old state
+      @monitored_unavailable = old_unavailable
+      @monitored_available = old_available
+      raise
     end
 
     # Fetches each currently running node manager's view of the
