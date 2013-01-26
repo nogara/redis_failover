@@ -404,7 +404,7 @@ module RedisFailover
     # @return [Boolean] true if nodes are different, false otherwise
     def nodes_changed?(new_nodes)
       return true if address_for(@master) != new_nodes[:master]
-      return true if different?(addresses_for(@slaves), new_nodes[:slaves])
+      # return true if different?(addresses_for(@slaves), new_nodes[:slaves])
       false
     end
 
