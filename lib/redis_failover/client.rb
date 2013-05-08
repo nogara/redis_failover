@@ -36,6 +36,12 @@ module RedisFailover
       end
     end
 
+    def call(command, &block)
+      method = command[0]
+      args = command[1..-1]
+      dispatch(method, *args, &block)
+    end
+
     # Creates a new failover redis client.
     #
     # @param [Hash] options the options used to initialize the client instance
@@ -123,7 +129,7 @@ module RedisFailover
 
     # @return [String] a string representation of the client
     def inspect
-      "#<RedisFailover::Client (master: #{master_name}, slaves: #{slave_names})>"
+      "#<RedisFailover::Client (db: #{@db.to_i}, master: #{master_name}, slaves: #{slave_names})>"
     end
     alias_method :to_s, :inspect
 
@@ -317,7 +323,7 @@ module RedisFailover
       logger.debug("Fetched nodes: #{nodes.inspect}")
 
       nodes
-    rescue Zookeeper::Exceptions::InheritedConnectionError => ex
+    rescue Zookeeper::Exceptions::InheritedConnectionError, ZK::Exceptions::InterruptedSession => ex
       logger.debug { "Caught #{ex.class} '#{ex.message}' - reopening ZK client" }
       @zk.reopen
       retry
